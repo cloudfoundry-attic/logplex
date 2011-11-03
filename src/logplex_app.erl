@@ -38,6 +38,7 @@ start(_StartType, _StartArgs) ->
     application:start(redis),
     setup_redgrid_vals(),
     application:start(nsync),
+    application:start(cowboy),
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 stop(_State) ->
