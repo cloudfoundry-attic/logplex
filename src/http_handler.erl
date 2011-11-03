@@ -22,16 +22,117 @@
 %% OTHER DEALINGS IN THE SOFTWARE.
 -module(http_handler).
 -behaviour(cowboy_http_handler).
-
 -export([init/3, handle/2, terminate/2]).
 
-init({tcp, http}, Req, Opts) ->
+-include("include/http.hrl").
+
+init({tcp, http}, Req, _Opts) ->
     {ok, Req, undefined_state}.
 
 handle(Req, State) ->
-    {ok, Req2} = cowboy_http_req:reply(200, [], <<"Hello World!">>, Req),
-    {ok, Req2, State}.
+    {ok, Req2} = loop(Req, Req#http_req.buffer),
+    {ok, Req2#http_req{buffer = <<>>}, State}.
 
-terminate(Req, State) ->
+terminate(_Req, _State) ->
     ok.
 
+loop(Req, Buffer) ->
+    case parse_msgs(Buffer) of
+        {ok, Rest} ->
+            Sock = Req#http_req.socket,
+            inet:setopts(Sock, [{active, once}]),
+            receive
+                {tcp, Sock, Data} ->
+                    loop(Req, <<Rest/binary, Data/binary>>);
+                {tcp_closed, Sock} ->
+                    cowboy_http_req:reply(200, [], <<"OK">>, Req);
+                {tcp_error, Sock, _Reason} ->
+                    cowboy_http_req:reply(200, [], <<"OK">>, Req);
+                _Other ->
+                    cowboy_http_req:reply(500, [], <<"Platform Error">>, Req)
+            after 5 * 60 * 1000 ->
+                cowboy_http_req:reply(200, [], <<"OK">>, Req)
+            end;
+        {error, closed} ->
+            cowboy_http_req:reply(200, [], <<"OK">>, Req);
+        _Err ->
+            cowboy_http_req:reply(500, [], <<"Platform Error">>, Req)
+    end.
+
+process_msg(Props) ->
+    io:format("Props: ~1000p~n", [Props]).
+
+parse_msgs(<<>>) ->
+    {ok, <<>>};
+
+parse_msgs(<<"\r\n">>) ->
+    {ok, <<>>};
+
+parse_msgs(Data) ->
+    case read_size(Data) of
+        {ok, 0, _Rest} ->
+            {error, closed};
+        {ok, Size, Rest} ->
+            case read_chunk(Rest, Size) of
+                {ok, <<"\r\n">>, Rest1} ->
+                    parse_msgs(Rest1);
+                {ok, Chunk, Rest1} ->
+                    case (catch mochijson2:decode(Chunk)) of
+                        {struct, Props} ->
+                            process_msg(Props),
+                            parse_msgs(Rest1);
+                        {'EXIT', Err} ->
+                            Err;
+                        Err ->
+                            Err
+                    end;
+                eof ->
+                    {ok, Data};
+                Err ->
+                    Err
+            end;
+        eof ->
+            {ok, Data};
+        Err ->
+            Err
+    end.
+
+read_size(Data) ->
+    case read_size(Data, [], true) of
+        {ok, Line, Rest} ->
+            case io_lib:fread("~16u", Line) of
+                {ok, [Size], []} ->
+                    {ok, Size, Rest};
+                _ ->
+                    {error, {poorly_formatted_size, Line}}
+            end;
+        Err ->
+            Err
+    end.
+
+read_size(<<>>, _, _) ->
+    eof;
+
+read_size(<<"\r\n", Rest/binary>>, Acc, _) ->
+    {ok, lists:reverse(Acc), Rest};
+
+read_size(<<$;, Rest/binary>>, Acc, _) ->
+    read_size(Rest, Acc, false);
+
+read_size(<<C, Rest/binary>>, Acc, AddToAcc) ->
+    case AddToAcc of
+        true ->
+            read_size(Rest, [C|Acc], AddToAcc);
+        false ->
+            read_size(Rest, Acc, AddToAcc)
+    end.
+
+read_chunk(Data, Size) ->
+    case Data of
+        <<Chunk:Size/binary, "\r\n", Rest/binary>> ->
+            {ok, Chunk, Rest};
+        <<_Chunk:Size/binary, _Rest/binary>> when size(_Rest) >= 2 ->
+            {error, malformed_chunk};
+        _ ->
+            eof
+    end.
