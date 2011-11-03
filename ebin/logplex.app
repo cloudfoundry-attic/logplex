@@ -23,7 +23,7 @@
     udp_acceptor 
   ]},
   {registered, []},
-  {applications, [kernel, stdlib, sasl, inets, crypto, public_key, ssl]},
+  {applications, [kernel, stdlib, sasl, inets, crypto, public_key, ssl, cowboy]},
   {mod, {logplex_app, []}}
  ]}.
  
