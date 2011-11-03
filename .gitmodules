@@ -19,3 +19,6 @@
 [submodule "deps/cowboy"]
 	path = deps/cowboy
 	url = git@git.herokai.com:cowboy.git
+[submodule "deps/quoted"]
+	path = deps/quoted
+	url = git@git.herokai.com:quoted.git
