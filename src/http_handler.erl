@@ -24,7 +24,7 @@
 -behaviour(cowboy_http_handler).
 -export([init/3, handle/2, terminate/2]).
 
--include("include/http.hrl").
+-include_lib("http.hrl").
 
 init({tcp, http}, Req, _Opts) ->
     {ok, Req, undefined_state}.
@@ -37,7 +37,8 @@ terminate(_Req, _State) ->
     ok.
 
 loop(Req, Buffer) ->
-    case parse_msgs(Buffer) of
+    Token = cowboy_http_req:header(<<"token">>, Req),
+    case parse_msgs(Buffer, Token) of
         {ok, Rest} ->
             Sock = Req#http_req.socket,
             inet:setopts(Sock, [{active, once}]),
@@ -59,28 +60,34 @@ loop(Req, Buffer) ->
             cowboy_http_req:reply(500, [], <<"Platform Error">>, Req)
     end.
 
-process_msg(Props) ->
-    io:format("Props: ~1000p~n", [Props]).
+process_msg(Props, Token) ->
+    logplex_stats:incr(message_received),
+    logplex_realtime:incr(message_received),
+    logplex_queue:in(logplex_work_queue, iolist_to_binary([
+        <<"<1>1 ">>, proplists:get_value(<<"timestamp">>, Props, <<"null">>),
+        <<" host ">>, Token, <<" ">>, proplists:get_value(<<"ps">>, Props, <<"null">>),
+        <<" - - ">>, proplists:get_value(<<"msg">>, Props, <<>>)
+    ])).
 
-parse_msgs(<<>>) ->
+parse_msgs(<<>>, _Token) ->
     {ok, <<>>};
 
-parse_msgs(<<"\r\n">>) ->
+parse_msgs(<<"\r\n">>, _Token) ->
     {ok, <<>>};
 
-parse_msgs(Data) ->
+parse_msgs(Data, Token) ->
     case read_size(Data) of
         {ok, 0, _Rest} ->
             {error, closed};
         {ok, Size, Rest} ->
             case read_chunk(Rest, Size) of
                 {ok, <<"\r\n">>, Rest1} ->
-                    parse_msgs(Rest1);
+                    parse_msgs(Rest1, Token);
                 {ok, Chunk, Rest1} ->
                     case (catch mochijson2:decode(Chunk)) of
                         {struct, Props} ->
-                            process_msg(Props),
-                            parse_msgs(Rest1);
+                            process_msg(Props, Token),
+                            parse_msgs(Rest1, Token);
                         {'EXIT', Err} ->
                             Err;
                         Err ->
