@@ -37,7 +37,7 @@ terminate(_Req, _State) ->
     ok.
 
 loop(Req, Buffer) ->
-    Token = cowboy_http_req:header(<<"Token">>, Req),
+    {Token, _Req} = cowboy_http_req:header(<<"Token">>, Req),
     case parse_msgs(Buffer, Token) of
         {ok, Rest} ->
             Sock = Req#http_req.socket,
